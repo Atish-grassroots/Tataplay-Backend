@@ -53,109 +53,70 @@ const ObjectId = require("mongodb").ObjectId;
  *
  */
 router.post(
-  "/login",
-  passport.authenticate("local", { failureRedirect: "/login-failure" }),
-  async function (req, res) {
-    const db = getDb();
-    try {
-      // Assuming req.user contains UserName and Password
-      const name = req.user.UserName;
-      const pass = req.user.Password;
-      const user = await db
-        .collection("UserMaster")
-        .findOne({ UserName: name, Password: pass });
-
-      if (user) {
-        const aid = parseInt(user.id);
-        // Insert into AgentsBiometric
-        const insertResult = await db.collection("AgentsBiometric").insertOne({
-          UserID: aid,
-          AStartTime: new Date(),
-          UserStatus: "Login",
-          BreakStatus: "Login",
-          TDate: new Date(),
-        });
-        // Store the insertedId in the user's session
-
-        req.session.sessionId = insertResult.insertedId;
-
-        // Update Users
-        await db
+    "/login",
+    passport.authenticate("local", { failureRedirect: "/login-failure" }),
+    async function (req, res) {
+      const db = getDb();
+      try {
+        const name = req.user.UserName;
+        const pass = req.user.Password;
+        const user = await db
           .collection("UserMaster")
-          .updateOne(
-            { id: aid },
-            { $set: { agentstatus: "Logged In", agentstatustime: new Date() } }
-          );
-
-        // Retrieve the updated user information
-        const updatedUser = await db
-          .collection("UserMaster")
-          .findOne({ id: aid });
-        updatedUser.sessionId = req.session.sessionId;
-        res.json(updatedUser);
-      } else {
-        res.status(401).send("User not found or not enabled");
+          .findOne({ UserName: name, Password: pass });
+  
+        if (user) {
+          const aid = parseInt(user.id);
+  
+          // Generate a daily unique ID
+          const dailyUniqueId = generateDailyUniqueId();
+  
+          // Insert into AgentsBiometric with the daily unique ID
+          const insertResult = await db.collection("AgentsBiometric").insertOne({
+            UserID: aid,
+            AStartTime: new Date(),
+            UserStatus: "Login",
+            BreakStatus: "Login",
+            TDate: new Date().toISOString().split('T')[0],
+            DailyUniqueId: dailyUniqueId,
+          });
+  
+          req.session.sessionId = insertResult.insertedId;
+  
+          // Update Users with the daily unique ID
+          await db
+            .collection("UserMaster")
+            .updateOne(
+              { id: aid },
+              { 
+                $set: { 
+                  agentstatus: "Logged In", 
+                  agentstatustime: new Date(),
+                  DailyUniqueId: dailyUniqueId // Update the daily unique ID
+                } 
+              }
+            );
+  
+          const updatedUser = await db
+            .collection("UserMaster")
+            .findOne({ id: aid });
+          updatedUser.sessionId = req.session.sessionId;
+          res.json(updatedUser);
+        } else {
+          res.status(401).send("User not found or not enabled");
+        }
+      } catch (error) {
+        res.status(500).send("Failed to process login");
       }
-    } catch (error) {
-      res.status(500).send("Failed to process login");
     }
+  );
+  
+  // Function to generate a daily unique ID
+  function generateDailyUniqueId() {
+    const today = new Date();
+    const dateString = today.toISOString().split('T')[0];
+    const uniqueId = `UID-${dateString}`;
+    return uniqueId;
   }
-);
-
-// router.post("/login", async function (req, res) {
-//     const db = getDb();
-//     try {
-//       // Assuming req.body contains UserName and Password
-//       const name = req.body.username;
-//       const pass = req.body.password;
-//      // console.log(req.body);
-//       //console.log("pass1", name);
-//       // Find the user by username only
-//       const user = await db.collection("UserMaster").findOne({ UserName: name });
-
-//       if (user) {
-//         // Decrypt the stored password to compare
-//         const decryptedPassword = decrypt(user.Password);
-//        // console.log("pass", pass);
-//         //console.log("decryptpass", decryptedPassword)
-
-//         if (decryptedPassword === pass) {
-//           const aid = parseInt(user.id);
-//           // Insert into AgentsBiometric
-//           const insertResult = await db.collection("AgentsBiometric").insertOne({
-//             UserID: aid,
-//             AStartTime: new Date(),
-//             UserStatus: "Login",
-//             BreakStatus: "Login",
-//             TDate: new Date(),
-//           });
-//           // Store the insertedId in the user's session
-//           req.session.sessionId = insertResult.insertedId;
-
-//           // Update Users
-//           await db
-//             .collection("UserMaster")
-//             .updateOne(
-//               { id: aid },
-//               { $set: { agentstatus: "Logged In", agentstatustime: new Date() } }
-//             );
-
-//           // Retrieve the updated user information
-//           const updatedUser = await db
-//             .collection("UserMaster")
-//             .findOne({ id: aid });
-//           updatedUser.sessionId = req.session.sessionId;
-//           res.json(updatedUser);
-//         } else {
-//           res.status(401).send("Incorrect password");
-//         }
-//       } else {
-//         res.status(401).send("User not found");
-//       }
-//     } catch (error) {
-//       res.status(500).send("Failed to process login");
-//     }
-//   });
 
 router.get("/login-failure", function (req, res) {
   res.send("Failed to login");
@@ -345,10 +306,10 @@ router.post("/register-break", async function (req, res) {
         BreakStartTime: new Date(),
         BreakType: breakType,
         BreakStatus: breakType,
-        TDate: new Date(),
+        TDate: new Date().toISOString().split('T')[0],
+        DailyUniqueId: `UID-${new Date().toISOString().split('T')[0]}`,
       });
 
-      // Store the insertedId in the user's session or another persistent storage
       req.session.breakId = insertResult.insertedId;
 
       console.log("Insert result:", insertResult);
@@ -474,152 +435,65 @@ router.get("/break-records", async function (req, res) {
  */
 router.get("/user-report", async function (req, res) {
   const db = getDb();
-  const date = new Date(req.query.date);
-  const nextDay = new Date(date);
-  nextDay.setDate(date.getDate() + 1);
+  const date = (req.query.date); 
+  //console.log(date);
 
   try {
     const userReport = await db.collection("AgentsBiometric").aggregate([
-        {
-          $lookup: {
-            from: "UserMaster",
-            let: { userId: "$UserID" },
-            pipeline: [
-              {
-                $match: {
-                  $expr: {
-                    $and: [
-                      { $eq: ["$id", "$$userId"] },
-                      { $eq: ["$Profile", 1] },
-                    ],
-                  },
-                },
-              },
-            ],
-            as: "userDetails",
-          },
-        },
-        { $unwind: "$userDetails" },
-        {
-          $match: {
-            TDate: {
-              $gte: date,
-              $lt: nextDay,
-            },
-          },
-        },
-        {
-          $group: {
-            _id: "$UserID",
-            name: { $first: "$userDetails.UserName" },
-            firstLoginTime: { $min: "$AStartTime" },
-            lastLogoutTime: {$max: {$cond: [{ $lt: ["$AEndTime", nextDay] }, "$AEndTime", null],},},
-            loginDuration: {$sum: { $subtract: ["$AEndTime", "$AStartTime"] },},
-            loginAttempts: {$sum: {$cond: [{$and: [{ $ne: ["$AStartTime", null] },{ $ne: ["$AEndTime", null] },{$or: [{ $eq: ["$UserStatus", "Login"] },{ $eq: ["$UserStatus", "Logout"] }, ],
-                      },
-                    ],
-                  },
-                  1,
-                  0,
-                ],
-              },
-            },
-            breakDuration: {
-              $sum: { $subtract: ["$BreakEndTime", "$BreakStartTime"] },
-            },
-            breakAttempts: {
-              $sum: {
-                $cond: [
-                  {
-                    $and: [
-                      { $ne: ["$BreakStartTime", null] },
-                      {
-                        $or: [
-                          { $eq: ["$BreakType", "TEA"] },
-                          { $eq: ["$BreakType", "LUNCH"] },
-                          { $eq: ["$BreakType", "TRAINING"] },
-                        ],
-                      },
-                    ],
-                  },
-                  1,
-                  0,
-                ],
-              },
-            },
-          },
-        },
-        {
-          $project: {
-            _id: 0,
-            userId: "$_id",
-            name: 1,
-            loginDuration: {
-              $let: {
-                vars: {
-                  hours: {
-                    $floor: { $divide: ["$loginDuration", 1000 * 60 * 60] },
-                  },
-                  minutes: {
-                    $floor: {
-                      $mod: [{ $divide: ["$loginDuration", 1000 * 60] }, 60],
-                    },
-                  },
-                  seconds: {
-                    $floor: {
-                      $mod: [{ $divide: ["$loginDuration", 1000] }, 60],
-                    },
-                  },
-                },
-                in: {
-                  $concat: [
-                    { $toString: "$$hours" },
-                    ":",
-                    { $toString: "$$minutes" },
-                    ":",
-                    { $toString: "$$seconds" },
+      {
+        $lookup: {
+          from: "UserMaster",
+          let: { userId: "$UserID" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ["$id", "$$userId"] },
+                    { $eq: ["$Profile", 1] },
                   ],
                 },
               },
             },
-            loginAttempts: 1,
-            breakDuration: {
-              $let: {
-                vars: {
-                  hours: {
-                    $floor: { $divide: ["$breakDuration", 1000 * 60 * 60] },
-                  },
-                  minutes: {
-                    $floor: {
-                      $mod: [{ $divide: ["$breakDuration", 1000 * 60] }, 60],
-                    },
-                  },
-                  seconds: {
-                    $floor: {
-                      $mod: [{ $divide: ["$breakDuration", 1000] }, 60],
-                    },
-                  },
-                },
-                in: {
-                  $concat: [
-                    { $toString: "$$hours" },
-                    ":",
-                    { $toString: "$$minutes" },
-                    ":",
-                    { $toString: "$$seconds" },
-                  ],
-                },
-              },
-            },
-            breakAttempts: 1,
-            firstLoginTime: 1,
-            lastLogoutTime: 1,
-          },
+          ],
+          as: "userDetails",
         },
-      ])
-      .toArray();
+      },
+      { $unwind: "$userDetails" },
+      {
+        $match: {
+            DailyUniqueId: date,
+        },
+      },
+     
+    ]).toArray();
 
-    res.json(userReport);
+    const userReportdata = userReport.map(item => {
+        return {
+          UserName: item.userDetails.UserName,
+          firstLoginTime: item.AStartTime ? item.AStartTime.toISOString() : null,
+          lastLogoutTime: item.AEndTime ? item.AEndTime.toISOString() : null,
+          loginDuration: item.AEndTime && item.AStartTime ? (item.AEndTime - item.AStartTime) : null,
+          loginAttempts: item.UserStatus === "Login" || item.UserStatus === "Logout" ? 1 : 0,
+          breakDuration: item.BreakEndTime && item.BreakStartTime ? (item.BreakEndTime - item.BreakStartTime) : null,
+          breakAttempts: item.BreakType ? 1 : 0
+        };
+      });
+      
+      const summarizedReport = userReportdata.reduce((acc, curr) => {
+        if (!acc[curr.UserName]) {
+          acc[curr.UserName] = { ...curr, loginAttempts: 0, breakAttempts: 0, loginDuration: 0, breakDuration: 0 };
+        }
+        acc[curr.UserName].loginAttempts += curr.loginAttempts;
+        acc[curr.UserName].breakAttempts += curr.breakAttempts;
+        acc[curr.UserName].loginDuration += curr.loginDuration;
+        acc[curr.UserName].breakDuration += curr.breakDuration;
+        return acc;
+      }, {});
+      
+      //console.log(summarizedReport);
+   // console.log(userReport);
+   res.json(Object.values(summarizedReport));
   } catch (error) {
     console.error("Failed to retrieve user report:", error);
     res.status(500).send("Failed to retrieve user report");
@@ -655,19 +529,37 @@ router.get("/user-report", async function (req, res) {
  *      500:
  *        description: Failed to retrieve users
  */
+// router.get("/get-user", async function (req, res) {
+//   const db = getDb();
+//   try {
+//     const usersWithProfileOne = await db
+//       .collection("UserMaster")
+//       .find({ Profile: 1 })
+//       .toArray();
+//     res.json(usersWithProfileOne);
+//   } catch (error) {
+//     console.error("Failed to retrieve users with profile 1:", error);
+//     res.status(500).send("Failed to retrieve users");
+//   }
+// });
 router.get("/get-user", async function (req, res) {
-  const db = getDb();
-  try {
-    const usersWithProfileOne = await db
-      .collection("UserMaster")
-      .find({ Profile: 1 })
-      .toArray();
-    res.json(usersWithProfileOne);
-  } catch (error) {
-    console.error("Failed to retrieve users with profile 1:", error);
-    res.status(500).send("Failed to retrieve users");
-  }
-});
+    const db = getDb();
+    try {
+      let rawData = await db.collection("UserMaster").find({}).toArray();
+  
+     let users = rawData.filter(user => user.Profile === 1);
+
+      users = users.map(user => {
+        const decryptedPassword = decrypt(user.Password);
+        return { ...user, Password: decryptedPassword };
+      });
+  
+      res.json(users);
+    } catch (error) {
+      console.error("Failed to retrieve users with profile 1 get:", error);
+      res.status(500).send("Failed to retrieve users");
+    }
+  });
 
 router.get("/get-user1", async function (req, res) {
   const db = getDb();
@@ -875,62 +767,63 @@ router.post("/add-user", async function (req, res) {
  *        description: Failed to update user
  */
 router.put("/edit-user/:userId", async function (req, res) {
-  const db = getDb();
-  const userId = parseInt(req.params.userId);
-  const { EmployeeName, UserName, UserPhone, Password, EmailID } = req.body;
-  let { Enabled } = req.body;
-
-  // Convert Enabled to an integer
-  Enabled = parseInt(Enabled);
-
-  if (
-    !EmployeeName ||
-    !UserName ||
-    !UserPhone ||
-    !Password ||
-    !EmailID ||
-    Enabled === undefined
-  ) {
-    return res.status(400).send("All fields including Enabled are required");
-  }
- // const encryptedPassword = encrypt(Password);
-
-  try {
-    const updateResult = await db.collection("UserMaster").updateOne(
-      { id: userId },
-      {
-        $set: {
-          EmployeeName,
-          UserName,
-          UserPhone,
-          Password,
-          EmailID,
-          Enabled,
-        },
+    const db = getDb();
+    const userId = parseInt(req.params.userId);
+    const { EmployeeName, UserName, UserPhone, Password, EmailID } = req.body;
+    let { Enabled } = req.body;
+  
+    Enabled = parseInt(Enabled);
+  
+    if (
+      !EmployeeName ||
+      !UserName ||
+      !UserPhone ||
+      !Password ||
+      !EmailID ||
+      Enabled === undefined
+    ) {
+      return res.status(400).send("All fields including Enabled are required");
+    }
+    // Encrypt the password before storing it
+    const encryptedPassword = encrypt(Password);
+  
+    try {
+      const updateResult = await db.collection("UserMaster").updateOne(
+        { id: userId },
+        {
+          $set: {
+            EmployeeName,
+            UserName,
+            UserPhone,
+            Password: encryptedPassword,
+            EmailID,
+            Enabled,
+          },
+        }
+      );
+  
+      if (updateResult.matchedCount === 0) {
+        return res.status(404).send("User not found");
       }
-    );
-
-    if (updateResult.matchedCount === 0) {
-      return res.status(404).send("User not found");
+  
+      if (updateResult.modifiedCount === 1) {
+        const updatedUser = await db
+          .collection("UserMaster")
+          .findOne({ id: userId });
+        // Decrypt the password before sending it in the response
+        updatedUser.Password = decrypt(updatedUser.Password);
+  
+        res
+          .status(200)
+          .json({ message: "User updated successfully", user: updatedUser });
+      } else {
+        throw new Error("Failed to update user");
+      }
+    } catch (error) {
+      console.error("Failed to update user:", error);
+      res.status(500).send("Failed to update user");
     }
-
-    if (updateResult.modifiedCount === 1) {
-      const updatedUser = await db
-        .collection("UserMaster")
-        .findOne({ id: userId });
-    //   updatedUser.Password = decrypt(updatedUser.Password);
-
-      res
-        .status(200)
-        .json({ message: "User updated successfully", user: updatedUser });
-    } else {
-      throw new Error("Failed to update user");
-    }
-  } catch (error) {
-    console.error("Failed to update user:", error);
-    res.status(500).send("Failed to update user");
-  }
-});
+  });
 
 // router.get('/login-success', async function(req, res) {
 //     const db = getDb();

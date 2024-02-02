@@ -15,15 +15,18 @@ function encrypt(text) {
 }
 
 function decrypt(text) {
-  let textParts = text.split(':');
-  let iv = Buffer.from(textParts.shift(), 'hex');
-  let encryptedText = Buffer.from(textParts.join(':'), 'hex');
-  let decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
-  let decrypted = decipher.update(encryptedText);
-
-  decrypted = Buffer.concat([decrypted, decipher.final()]);
-
-  return decrypted.toString();
-}
+    let textParts = text.split(':');
+    let iv = Buffer.from(textParts.shift(), 'hex');
+    let encryptedText = Buffer.from(textParts.join(':'), 'hex');
+   // console.log(`IV length: ${iv.length}, IV: ${iv.toString('hex')}`); 
+    //console.log(`Encrypted text: ${encryptedText.toString('hex')}`); 
+    let decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY), iv);
+    let decrypted = decipher.update(encryptedText);
+  
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+  
+    return decrypted.toString();
+  }
+  
 
 module.exports = { encrypt, decrypt };
